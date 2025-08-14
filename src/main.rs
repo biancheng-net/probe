@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use sysinfo::{MemoryRefreshKind, Networks, System};
 
+// 引入日志库
+use log::{debug, error, info, warn};
+
 #[derive(Parser, Debug)]
 #[command(name = "探针客户端", author, version, about = "简单的探针", long_about = None)]
 struct Cli {
@@ -20,6 +23,9 @@ struct Cli {
     /// 运行的秒数，默认值为1
     #[arg(short, long, default_value_t = 1)]
     seconds: u64,
+    /// 设置日志级别，默认为 info
+    #[arg(long, default_value = "info")]
+    log_level: String,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -54,6 +60,10 @@ struct SystemInfo {
     load_avg_five_minute: f64,
     #[serde(rename = "lafifm")]
     load_avg_fifteen_minute: f64,
+    #[serde(rename = "st")]
+    submit_timestamp: i64,
+    #[serde(rename = "ut")]
+    uptime: u64,
 }
 
 impl SystemInfo {
@@ -65,7 +75,7 @@ impl SystemInfo {
     }
 }
 
-// 新添加的异步函数，用于提交数据
+// 提交数据到服务端
 async fn submit_info_to_server(
     client: &Client,
     api_host: &str,
@@ -73,8 +83,7 @@ async fn submit_info_to_server(
     info: &SystemInfo,
 ) -> Result<()> {
     let url = format!("{}/submit", api_host);
-
-    println!("Submitting data to {}...", url);
+    debug!("Submitting data to {}...", url);
 
     let response = client
         .post(&url)
@@ -85,9 +94,9 @@ async fn submit_info_to_server(
         .await?;
 
     if response.status().is_success() {
-        println!("Data submitted successfully. Status: {}", response.status());
+        info!("Data submitted successfully. Status: {}", response.status());
     } else {
-        eprintln!(
+        error!(
             "Failed to submit data. Status: {}, Body: {:?}",
             response.status(),
             response.text().await?
@@ -99,61 +108,54 @@ async fn submit_info_to_server(
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    // 根据命令行参数初始化日志系统
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&cli.log_level))
+        .init();
 
-    // 初始化 System 对象并填充所有数据
+    info!("Client starting with node_name: {}", cli.node_name);
+
     let mut system = System::new_all();
-
-    // 检查是否有网络接口
     let mut networks = Networks::new_with_refreshed_list();
-    let client = Client::new();
+    let client = Client::builder().no_proxy().build()?;
     let delay_seconds = cli.seconds;
-    loop {
-        // 记录循环开始时间
-        let start_time = Instant::now();
 
-        // 存储当前网络数据
+    loop {
+        let start_time = Instant::now();
         let mut system_info = SystemInfo::new(&cli.node_name);
 
-        // 刷新特定数据：网络、内存、CPU
+        debug!("Refreshing system data...");
         system.refresh_specifics(
             sysinfo::RefreshKind::nothing()
                 .with_memory(MemoryRefreshKind::everything())
                 .with_cpu(sysinfo::CpuRefreshKind::everything()),
         );
         networks.refresh(true);
-        // 刷新 CPU 使用率（需要额外调用以确保数据准确）
         system.refresh_cpu_usage();
-        // 确保 CPU 数据累积足够时间
         tokio::time::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL).await;
 
         if networks.is_empty() {
-            println!("No network interfaces found!");
+            warn!("No network interfaces found!");
         } else {
             for (_, data) in &networks {
-                // current_data.push((interface_name.clone(), data.received(), data.transmitted()));
                 system_info.network_received += data.received();
                 system_info.network_transmitted += data.transmitted();
                 system_info.network_total_received += data.total_received();
                 system_info.network_total_transmitted += data.total_transmitted();
             }
-
             system_info.network_received_speed = system_info.network_received / delay_seconds;
             system_info.network_transmitted_speed = system_info.network_transmitted / delay_seconds;
         }
 
-        // 内存使用率统计
         system_info.total_memory = system.total_memory();
         system_info.used_memory = system.used_memory();
         system_info.total_swap = system.total_swap();
         system_info.used_swap = system.used_swap();
 
-        // CPU 使用率统计
         let cpus = system.cpus();
         let mut total_cpu_usage = 0.0;
         let cpu_count = cpus.len() as f32;
-        for (i, cpu) in cpus.iter().enumerate() {
-            let usage = cpu.cpu_usage();
-            total_cpu_usage += usage;
+        for cpu in cpus.iter() {
+            total_cpu_usage += cpu.cpu_usage();
         }
         system_info.avg_cpu_usage = if cpu_count > 0.0 {
             total_cpu_usage / cpu_count
@@ -161,7 +163,6 @@ async fn main() -> anyhow::Result<()> {
             0.0
         };
 
-        // 系统负载统计
         if sysinfo::IS_SUPPORTED_SYSTEM {
             let load_avg = System::load_average();
             let cpu_count = system.cpus().len() as f64;
@@ -169,23 +170,26 @@ async fn main() -> anyhow::Result<()> {
             system_info.load_avg_five_minute = (load_avg.five / cpu_count) * 100.0;
             system_info.load_avg_fifteen_minute = (load_avg.fifteen / cpu_count) * 100.0;
         } else {
-            println!("System Load Average: Not supported on this OS");
+            warn!("System Load Average: Not supported on this OS");
         }
 
-        // 等待 5 秒
-        tokio::time::sleep(
-            Duration::from_secs(delay_seconds as u64) - sysinfo::MINIMUM_CPU_UPDATE_INTERVAL,
-        )
-        .await;
+        system_info.submit_timestamp = chrono::Utc::now().timestamp();
+        system_info.uptime = sysinfo::System::uptime();
 
-        println!("{:#?}", system_info);
-        println!("{:?}", serde_json::to_string(&system_info));
+        debug!("SystemInfo collected: {:#?}", system_info);
 
-        submit_info_to_server(&client, &cli.api_host, &cli.token, &system_info).await?;
+        if let Err(e) =
+            submit_info_to_server(&client, &cli.api_host, &cli.token, &system_info).await
+        {
+            error!("{:?}", e);
+        };
 
-        // 记录循环结束时间并计算耗时
-        let end_time = Instant::now();
-        let duration = end_time.duration_since(start_time);
-        println!("Time elapsed for this iteration: {:.2?}", duration);
+        let duration = Instant::now().duration_since(start_time);
+        let sleep_duration = Duration::from_secs(delay_seconds as u64).saturating_sub(duration);
+
+        debug!("Time elapsed for this iteration: {:.2?}", duration);
+        debug!("Sleeping for {:.2?}", sleep_duration);
+
+        tokio::time::sleep(sleep_duration).await;
     }
 }
