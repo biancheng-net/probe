@@ -1,0 +1,68 @@
+name: Rust Multi-platform Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build_for_all:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Rename and zip artifact (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mv target/release/probe probe-linux
+          zip probe-linux.zip probe-linux
+      
+      - name: Rename and zip artifact (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mv target/release/probe probe-macos
+          zip probe-macos.zip probe-macos
+
+      - name: Rename and zip artifact (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mv target/release/probe.exe probe-windows.exe
+          zip probe-windows.zip probe-windows.exe
+
+      - name: Upload artifact to release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            probe-linux.zip
+            probe-macos.zip
+            probe-windows.zip
