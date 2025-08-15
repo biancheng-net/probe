@@ -54,9 +54,10 @@ jobs:
 
       - name: Rename and zip artifact (Windows)
         if: runner.os == 'Windows'
+        shell: pwsh # 明确指定使用 PowerShell
         run: |
           mv target/release/probe.exe probe-windows.exe
-          zip probe-windows.zip probe-windows.exe
+          Compress-Archive -Path probe-windows.exe -DestinationPath probe-windows.zip
 
       - name: Upload artifact to release
         uses: softprops/action-gh-release@v2
