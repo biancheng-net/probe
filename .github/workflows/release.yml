@@ -35,6 +35,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Install musl toolchain on Linux before building.
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -65,7 +70,6 @@ jobs:
           mkdir -p build_artifacts
           # Linux and macOS
           if [ "${{ runner.os }}" != "Windows" ]; then
-            # 这里的路径需要根据是否是 musl 编译来判断
             BINARY_PATH="target/release/probe"
             if [ "${{ matrix.target }}" != "" ]; then
               BINARY_PATH="target/${{ matrix.target }}/release/probe"
@@ -75,7 +79,6 @@ jobs:
             mv target/release/probe.exe "build_artifacts/${{ matrix.file_name }}.exe"
           fi
           
-          # 打包为 zip，并包含 static 目录
           zip -r "build_artifacts/${{ matrix.file_name }}.zip" build_artifacts/${{ matrix.file_name }}* static/
 
       - name: Create a GitHub Release
