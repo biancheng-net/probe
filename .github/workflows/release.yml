@@ -52,20 +52,31 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Build release
+      - name: Build release (MUSL)
+        if: matrix.target != ''
         run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build release (Native)
+        if: matrix.target == ''
+        run: cargo build --release
 
       - name: Archive build artifacts
         run: |
           mkdir -p build_artifacts
           # Linux and macOS
           if [ "${{ runner.os }}" != "Windows" ]; then
-            mv target/${{ matrix.target }}/release/probe build_artifacts/${{ matrix.file_name }}
+            # 这里的路径需要根据是否是 musl 编译来判断
+            BINARY_PATH="target/release/probe"
+            if [ "${{ matrix.target }}" != "" ]; then
+              BINARY_PATH="target/${{ matrix.target }}/release/probe"
+            fi
+            mv "$BINARY_PATH" "build_artifacts/${{ matrix.file_name }}"
           else
-            mv target/release/probe.exe build_artifacts/${{ matrix.file_name }}.exe
+            mv target/release/probe.exe "build_artifacts/${{ matrix.file_name }}.exe"
           fi
-
-          zip build_artifacts/${{ matrix.file_name }}.zip build_artifacts/${{ matrix.file_name }}*
+          
+          # 打包为 zip，并包含 static 目录
+          zip -r "build_artifacts/${{ matrix.file_name }}.zip" build_artifacts/${{ matrix.file_name }}* static/
 
       - name: Create a GitHub Release
         id: create_release
