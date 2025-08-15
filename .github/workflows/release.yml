@@ -66,16 +66,18 @@ jobs:
         run: cargo build --release
 
       - name: Move binary for upload
+        shell: bash  # Use bash for a consistent shell environment
         run: |
           mkdir -p build_artifacts
-          if [ "${{ runner.os }}" != "Windows" ]; then
+          
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            mv target/release/probe.exe "build_artifacts/${{ matrix.file_name }}.exe"
+          else
             BINARY_PATH="target/release/probe"
             if [ "${{ matrix.target }}" != "" ]; then
               BINARY_PATH="target/${{ matrix.target }}/release/probe"
             fi
             mv "$BINARY_PATH" "build_artifacts/${{ matrix.file_name }}"
-          else
-            mv target/release/probe.exe "build_artifacts/${{ matrix.file_name }}.exe"
           fi
 
       - name: Upload binary to release
